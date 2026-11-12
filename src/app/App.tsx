@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Activity, ArrowUpRight, Check, ChevronRight, Clipboard, Copy, Download, ExternalLink, KeyRound, Link2, LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Wallet, Wifi, XCircle, Zap } from 'lucide-react'
-import { formatEther } from 'viem'
-import { GIWA_CHAIN_ID, GIWA_EXPLORER_URL, GIWA_RPC_URL, explorerAddressUrl, publicClient } from '../lib/giwa'
+import { formatEther, parseUnits } from 'viem'
+import { GIWA_EXPLORER_URL, explorerAddressUrl } from '../lib/giwa'
 import { createEncryptedWalletBackup, downloadEncryptedWallet } from '../lib/keystore'
 import { formatEth, formatTime, shortenAddress, chainLabel } from '../lib/format'
 import { readActivities, writeActivities } from '../lib/storage'
 import { generateTokenIdentity } from '../lib/token-names'
-import { connectInjectedWallet, connectMetaMaskMobileWallet, connectMetaMaskWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, hasMetaMaskWallet, switchToGiwaSepolia } from '../lib/wallet'
+import { connectInjectedWallet, connectMetaMaskMobileWallet, connectMetaMaskWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, hasMetaMaskWallet, getWalletClientForNetwork, switchToNetwork } from '../lib/wallet'
 import type { ActivityRecord, BalanceState, WalletState } from '../types/wallet'
+import { APP_NETWORKS, appNetworkChains, getNetwork, getPublicClient, type AppNetworkId } from '../lib/networks'
+import { TOKEN_CONTRACT_ABI, TOKEN_CONTRACT_BYTECODE } from '../lib/token-contract'
 
 const initialWallet: WalletState = { address: null, chainId: null, connected: false, source: null, error: null }
 const initialBalance: BalanceState = { eth: '0', blockNumber: null, updatedAt: null, loading: false, error: null }
@@ -25,6 +27,12 @@ function App() {
   const [backupPassword, setBackupPassword] = useState('')
   const [backupPasswordAgain, setBackupPasswordAgain] = useState('')
   const [backupBusy, setBackupBusy] = useState(false)
+  const [activeView, setActiveView] = useState<'dashboard' | 'networks' | 'deploy'>('dashboard')
+  const [selectedNetworkId, setSelectedNetworkId] = useState<AppNetworkId>('giwa-testnet')
+  const [deployName, setDeployName] = useState('Giwa Test Token')
+  const [deploySymbol, setDeploySymbol] = useState('GTT')
+  const [deploySupply, setDeploySupply] = useState('1000000')
+  const [deployBusy, setDeployBusy] = useState(false)
 
   const addActivity = useCallback((activity: Omit<ActivityRecord, 'id' | 'createdAt'>) => {
     setActivities((current) => {
@@ -43,6 +51,8 @@ function App() {
         return
       }
       setWallet({ ...connected, connected: true, error: null })
+      const networkMatch = Object.values(APP_NETWORKS).find((network) => network.chainId === connected.chainId)
+      if (networkMatch) setSelectedNetworkId(networkMatch.id)
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Tidak dapat membaca koneksi wallet.'
       setWallet((current) => ({ ...current, error: message }))
@@ -54,15 +64,15 @@ function App() {
     setBalance((current) => ({ ...current, loading: true, error: null }))
     try {
       const [rawBalance, blockNumber] = await Promise.all([
-        publicClient.getBalance({ address }),
-        publicClient.getBlockNumber(),
+        getPublicClient(selectedNetworkId).getBalance({ address }),
+        getPublicClient(selectedNetworkId).getBlockNumber(),
       ])
       setBalance({ eth: formatEther(rawBalance), blockNumber, updatedAt: new Date(), loading: false, error: null })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'RPC GIWA belum merespons.'
       setBalance((current) => ({ ...current, loading: false, error: message }))
     }
-  }, [wallet.address])
+  }, [wallet.address, selectedNetworkId])
 
   useEffect(() => {
     void refreshWallet()
@@ -86,9 +96,41 @@ function App() {
     return () => window.clearInterval(timer)
   }, [wallet.address, wallet.chainId, refreshBalance])
 
-  const isGiwa = wallet.chainId === GIWA_CHAIN_ID
-  const statusLabel = wallet.connected ? (isGiwa ? 'LIVE / GIWA SEPOLIA' : 'NETWORK REVIEW') : 'WALLET OFFLINE'
-  const statusTone = wallet.connected && isGiwa ? 'live' : wallet.connected ? 'warn' : 'idle'
+  const selectedNetwork = getNetwork(selectedNetworkId)
+  const isSelectedChain = wallet.chainId === selectedNetwork.chainId
+  const statusLabel = wallet.connected ? (isSelectedChain ? `LIVE / ${selectedNetwork.shortName}` : 'NETWORK REVIEW') : 'WALLET OFFLINE'
+  const statusTone = wallet.connected && isSelectedChain ? 'live' : wallet.connected ? 'warn' : 'idle'
+  async function handleSelectNetwork(networkId: AppNetworkId) {
+    const network = getNetwork(networkId)
+    setSelectedNetworkId(networkId)
+    if (!wallet.connected) { setNotice({ type: 'info', message: `${network.name} dipilih. Hubungkan wallet untuk membaca balance.` }); return }
+    try {
+      await switchToNetwork(network, wallet.source || 'injected')
+      await refreshWallet()
+      setNotice({ type: 'success', message: `${network.name} aktif di wallet.` })
+    } catch (error) {
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Network tidak dapat diganti.' })
+    }
+  }
+
+  async function handleDeployToken() {
+    if (!wallet.address) { setNotice({ type: 'error', message: 'Hubungkan wallet sebelum deploy token.' }); return }
+    if (!deployName.trim() || !deploySymbol.trim() || !deploySupply || Number(deploySupply) <= 0) { setNotice({ type: 'error', message: 'Isi nama, simbol, dan supply token dengan benar.' }); return }
+    setDeployBusy(true)
+    try {
+      await switchToNetwork(selectedNetwork, wallet.source || 'injected')
+      const walletClient = getWalletClientForNetwork(wallet.address, appNetworkChains[selectedNetworkId], wallet.source || 'injected')
+      if (!walletClient) throw new Error('Wallet client tidak tersedia.')
+      const initialSupply = parseUnits(deploySupply, 18)
+      const hash = await walletClient.deployContract({ account: wallet.address, chain: appNetworkChains[selectedNetworkId], abi: TOKEN_CONTRACT_ABI, bytecode: TOKEN_CONTRACT_BYTECODE, args: [deployName.trim(), deploySymbol.trim().toUpperCase(), initialSupply, wallet.address] })
+      addActivity({ kind: 'transaction', title: 'Token deployment submitted', detail: `${deployName.trim()} / ${selectedNetwork.name}`, status: 'pending', txHash: hash })
+      setNotice({ type: 'success', message: `Transaksi deploy dikirim: ${hash.slice(0, 12)}…` })
+      setActiveView('dashboard')
+    } catch (error) {
+      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Deploy token gagal atau ditolak wallet.' })
+    } finally { setDeployBusy(false) }
+  }
+
   const formattedBalance = useMemo(() => {
     try {
       return Number(balance.eth).toLocaleString('id-ID', { maximumFractionDigits: 6 })
@@ -142,7 +184,7 @@ function App() {
 
   async function handleSwitchNetwork() {
     try {
-      await switchToGiwaSepolia(wallet.source || 'injected')
+      await switchToNetwork(getNetwork('giwa-testnet'), wallet.source || 'injected')
       await refreshWallet()
       setNotice({ type: 'success', message: 'GIWA Sepolia dipilih di wallet.' })
     } catch (error) {
@@ -196,6 +238,7 @@ function App() {
           <span className="brand-mark"><Zap size={16} strokeWidth={2.5} /></span>
           <span>GIWA<span className="brand-slash">/</span>TOOLS</span>
         </a>
+        <nav className="app-nav" aria-label="Main menu"><button className={activeView === 'dashboard' ? 'active' : ''} onClick={() => setActiveView('dashboard')}>Dashboard</button><button className={activeView === 'networks' ? 'active' : ''} onClick={() => setActiveView('networks')}>Networks</button><button className={activeView === 'deploy' ? 'active' : ''} onClick={() => setActiveView('deploy')}>Deploy Token</button></nav>
         <div className="topbar-meta">
           <span className="mono muted">TESTNET ONLY</span>
           <a className="explorer-link" href={GIWA_EXPLORER_URL} target="_blank" rel="noreferrer">Explorer <ExternalLink size={13} /></a>
@@ -210,11 +253,11 @@ function App() {
 
           <section className="status-card">
             <div className="status-card-top"><span className={`status-pill ${statusTone}`}><span className="status-dot" /> {statusLabel}</span><Wifi size={15} /></div>
-            <div className="status-value">{formattedBalance}<span> ETH</span></div>
+            <div className="status-value">{formattedBalance}<span> {selectedNetwork.symbol}</span></div>
             <div className="status-caption">Native balance <span className="mono">/ live polling 5s</span></div>
             <div className="status-divider" />
             <div className="mini-grid">
-              <div><span>CHAIN</span><strong>{wallet.chainId ?? '—'}</strong></div>
+              <div><span>CHAIN</span><strong>{selectedNetwork.chainId}</strong></div>
               <div><span>BLOCK</span><strong>{balance.blockNumber?.toString() ?? '—'}</strong></div>
               <div><span>LAST READ</span><strong>{formatTime(balance.updatedAt)}</strong></div>
             </div>
@@ -231,14 +274,15 @@ function App() {
                 <a className="sub-link mono" href={wallet.address ? explorerAddressUrl(wallet.address) : '#'} target="_blank" rel="noreferrer">open on explorer <ArrowUpRight size={12} /></a>
               </>
             ) : <p className="empty-copy">Hubungkan wallet untuk membaca balance real-time.</p>}
-            {wallet.connected && !isGiwa && <button className="button button-outline full-width" onClick={() => void handleSwitchNetwork()}>Switch ke GIWA Sepolia <ChevronRight size={15} /></button>}
+            {wallet.connected && !isSelectedChain && <button className="button button-outline full-width" onClick={() => void handleSelectNetwork(selectedNetworkId)}>Switch ke {selectedNetwork.name} <ChevronRight size={15} /></button>}
             {!wallet.connected && <div className="wallet-connect-stack"><button className="button button-primary full-width" onClick={() => void handleConnectMetaMaskMobile()}>Connect MetaMask Android <Link2 size={15} /></button><button className="button button-outline full-width" onClick={() => void handleConnectMetaMask()}>{hasMetaMaskWallet() ? 'Connect MetaMask extension' : 'MetaMask direct / extension'} <Link2 size={15} /></button><button className="button button-outline full-width" onClick={() => void handleConnect()}>{hasInjectedWallet() ? 'Connect Klever langsung' : 'Buka di Klever Web3 browser'} <Link2 size={15} /></button><div className="micro-note"><span className="signal-dot" /> Android: tekan tombol pertama untuk membuka MetaMask dan kembali ke GiwaTools.</div></div>}
           </section>
 
-          <div className="sidebar-footer"><span className="mono">RPC</span><span className="mono truncate">{GIWA_RPC_URL}</span></div>
+          <div className="sidebar-footer"><span className="mono">RPC</span><span className="mono truncate">{selectedNetwork.rpcUrl}</span></div>
         </aside>
 
         <section className="workspace">
+          {activeView === 'dashboard' && <>
           <div className="workspace-head">
             <div><div className="eyebrow">CONTROL SURFACE / 01</div><h2>Build a clean starting point.</h2></div>
             <div className="head-actions"><span className="secure-badge"><ShieldCheck size={15} /> non-custodial</span><button className="refresh-button" onClick={() => void refreshBalance()} disabled={!wallet.address}><RefreshCw size={15} /> Refresh</button></div>
@@ -271,10 +315,13 @@ function App() {
           </section>
 
           <section className="activity-section"><div className="activity-head"><div><div className="eyebrow">LOCAL ACTIVITY / 05</div><h3>Recent signals</h3></div><span className="mono muted">{activities.length.toString().padStart(2, '0')} EVENTS</span></div>{activities.length === 0 ? <div className="empty-state"><Activity size={18} /><span>Belum ada aktivitas. Connect wallet atau generate token untuk mulai.</span></div> : <div className="activity-list">{activities.slice(0, 6).map((item) => <div className="activity-row" key={item.id}><span className={`activity-icon ${item.status}`}>{item.status === 'success' ? <Check size={14} /> : item.status === 'error' ? <XCircle size={14} /> : <Activity size={14} />}</span><div className="activity-copy"><strong>{item.title}</strong><span>{item.detail}</span></div><time className="mono">{formatTime(item.createdAt)}</time></div>)}</div>}</section>
+          </>}
+          {activeView === 'networks' && <section className="menu-view"><div className="workspace-head"><div><div className="eyebrow">NETWORK CONTROL / 06</div><h2>Choose your testnet.</h2></div><span className="secure-badge">3 RPC endpoints</span></div><p className="panel-copy menu-lede">Pilih network untuk membaca balance, menambahkan chain ke wallet, dan menyiapkan target deploy. Semua network di bawah adalah testnet.</p><div className="network-list">{Object.values(APP_NETWORKS).map((network) => <button className={`network-card ${selectedNetworkId === network.id ? 'selected' : ''}`} key={network.id} onClick={() => void handleSelectNetwork(network.id)}><div className="network-card-top"><div><span className="eyebrow">CHAIN {network.chainId}</span><h3>{network.name}</h3></div><span className="network-symbol">{network.symbol}</span></div><div className="network-meta"><span>RPC</span><strong>{network.rpcUrl}</strong></div><div className="network-meta"><span>EXPLORER</span><strong>{network.explorerUrl.replace('https://', '')}</strong></div><div className="network-action">{selectedNetworkId === network.id ? 'SELECTED / ACTIVE TARGET' : 'USE THIS NETWORK'} <ChevronRight size={15} /></div></button>)}</div><div className="guardrail"><ShieldCheck size={16} /><span>Testnet only. Pastikan wallet memiliki token gas yang sesuai: ETH untuk Sepolia/GIWA dan tBNB untuk BSC Testnet.</span></div></section>}
+          {activeView === 'deploy' && <section className="menu-view"><div className="workspace-head"><div><div className="eyebrow">SMART CONTRACT / 07</div><h2>Deploy a test token.</h2></div><span className="secure-badge">approval required</span></div><p className="panel-copy menu-lede">Deploy ERC-20 minimal ke network pilihan. Tidak ada transaksi otomatis: GiwaTools menyiapkan bytecode, meminta switch network, lalu wallet menampilkan approval.</p><div className="deploy-layout"><section className="panel deploy-form-panel"><div className="panel-heading"><div className="icon-tile lime"><Zap size={17} /></div><div><div className="eyebrow">TOKEN PARAMETERS</div><h3>Token configuration</h3></div></div><label className="form-field"><span className="field-label">TOKEN NAME</span><input value={deployName} onChange={(event) => setDeployName(event.target.value)} placeholder="My Test Token" /></label><label className="form-field"><span className="field-label">SYMBOL</span><input value={deploySymbol} onChange={(event) => setDeploySymbol(event.target.value.toUpperCase().slice(0, 8))} placeholder="MTK" /></label><label className="form-field"><span className="field-label">INITIAL SUPPLY / 18 DECIMALS</span><input inputMode="decimal" value={deploySupply} onChange={(event) => setDeploySupply(event.target.value.replace(/[^0-9.]/g, ''))} placeholder="1000000" /></label><button className="button button-primary full-width deploy-submit" onClick={() => void handleDeployToken()} disabled={deployBusy}>{deployBusy ? <><RefreshCw size={15} className="spin" /> Preparing approval…</> : <>Deploy token on {selectedNetwork.shortName} <ArrowUpRight size={15} /></>}</button></section><section className="panel deploy-preview"><div className="eyebrow">DEPLOYMENT PREVIEW</div><div className="deploy-preview-row"><span>NETWORK</span><strong>{selectedNetwork.name}</strong></div><div className="deploy-preview-row"><span>CHAIN ID</span><strong>{selectedNetwork.chainId}</strong></div><div className="deploy-preview-row"><span>CONTRACT</span><strong>GiwaToolsToken / ERC-20</strong></div><div className="deploy-preview-row"><span>OWNER</span><strong>{wallet.address ? shortenAddress(wallet.address) : 'Connect wallet first'}</strong></div><div className="guardrail"><ShieldCheck size={16} /><span>Review network, token values, gas fee, and wallet approval before signing.</span></div><button className="button button-ghost full-width" onClick={() => setActiveView('networks')}>Change target network <ChevronRight size={15} /></button></section></div></section>}
         </section>
       </main>
 
-      <footer className="footer"><span>GiwaTools / a transparent testnet surface</span><span className="mono">CHAIN {GIWA_CHAIN_ID} · ETH · 1s blocks</span></footer>
+      <footer className="footer"><span>GiwaTools / a transparent testnet surface</span><span className="mono">CHAIN {selectedNetwork.chainId} · {selectedNetwork.symbol} · TESTNET</span></footer>
     </div>
   )
 }

@@ -40,6 +40,20 @@
 - [x] Simpan hanya metadata aktivitas non-rahasia di localStorage.
 - [x] Tambahkan security notice bahwa swap belum diaktifkan tanpa router resmi/terverifikasi.
 
+## Menu Networks
+
+- [x] Tampilkan pilihan Ethereum Sepolia (chain ID 11155111), BNB Smart Chain Testnet (chain ID 97), dan GIWA Testnet (chain ID 91342) dalam menu terpisah dari dashboard.
+- [x] Tampilkan RPC, simbol native, explorer, dan status selected target untuk setiap testnet.
+- [x] Izinkan pemilihan network dan minta wallet berpindah chain melalui `wallet_switchEthereumChain`; tambahkan chain bila provider mengembalikan 4902.
+- [x] Balance mengikuti network yang dipilih dan polling ulang setiap 5 detik.
+
+## Menu Deploy Token
+
+- [x] Sediakan menu terpisah `Deploy Token`, tidak digabung dalam satu frame dashboard.
+- [x] Sediakan form token name, symbol, initial supply, network target, owner wallet, dan preview kontrak ERC-20 minimal.
+- [x] Siapkan bytecode deployment lokal dan minta approval wallet setelah network, parameter, dan target ditampilkan.
+- [x] Tidak mengirim transaksi otomatis tanpa klik pengguna; tampilkan error jika wallet belum terhubung atau transaksi ditolak.
+
 ## Vercel readiness
 
 - [x] Build static berhasil.

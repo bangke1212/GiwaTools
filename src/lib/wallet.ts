@@ -142,22 +142,32 @@ export async function getConnectedWallet(): Promise<WalletConnection | null> {
 }
 
 export async function switchToGiwaSepolia(source: WalletSource = 'injected') {
+  return switchToNetwork({
+    chainId: GIWA_CHAIN_ID,
+    name: giwaSepolia.name,
+    symbol: 'ETH',
+    rpcUrl: giwaSepolia.rpcUrls.default.http[0],
+    explorerUrl: giwaSepolia.blockExplorers.default.url,
+  }, source)
+}
+
+export async function switchToNetwork(network: { chainId: number; name: string; symbol: string; rpcUrl: string; explorerUrl: string }, source: WalletSource = 'injected') {
   const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() : getInjectedProvider()
   if (!provider) throw new Error('Provider wallet belum tersedia.')
 
   try {
-    await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: `0x${GIWA_CHAIN_ID.toString(16)}` }] })
+    await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: `0x${network.chainId.toString(16)}` }] })
   } catch (error) {
     const code = (error as { code?: number }).code
-    if (source !== 'injected' || code !== 4902) throw error
+    if (source === 'walletconnect' || code !== 4902) throw error
     await provider.request({
       method: 'wallet_addEthereumChain',
       params: [{
-        chainId: `0x${GIWA_CHAIN_ID.toString(16)}`,
-        chainName: giwaSepolia.name,
-        nativeCurrency: giwaSepolia.nativeCurrency,
-        rpcUrls: [giwaSepolia.rpcUrls.default.http[0]],
-        blockExplorerUrls: [giwaSepolia.blockExplorers.default.url],
+        chainId: `0x${network.chainId.toString(16)}`,
+        chainName: network.name,
+        nativeCurrency: { name: network.symbol, symbol: network.symbol, decimals: 18 },
+        rpcUrls: [network.rpcUrl],
+        blockExplorerUrls: [network.explorerUrl],
       }],
     })
   }
@@ -174,4 +184,10 @@ export function getWalletClient(address: `0x${string}`, source: WalletSource = '
   const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() : getInjectedProvider()
   if (!provider) return null
   return createWalletClient({ account: address, chain: giwaSepolia, transport: custom(provider) })
+}
+
+export function getWalletClientForNetwork(address: `0x${string}`, chain: Parameters<typeof createWalletClient>[0]['chain'], source: WalletSource = 'injected'): WalletClient | null {
+  const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() : getInjectedProvider()
+  if (!provider) return null
+  return createWalletClient({ account: address, chain, transport: custom(provider) })
 }
