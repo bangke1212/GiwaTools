@@ -98,6 +98,10 @@ function App() {
   }, [balance.eth])
 
   async function handleConnect() {
+    if (!hasInjectedWallet()) {
+      setNotice({ type: 'info', message: 'Buka URL GiwaTools melalui Klever Wallet > Web3 browser agar provider wallet diinjeksi, atau gunakan tombol WalletConnect Android.' })
+      return
+    }
     try {
       const connected = await connectInjectedWallet()
       setWallet({ ...connected, connected: true, error: null })
@@ -215,7 +219,7 @@ function App() {
               </>
             ) : <p className="empty-copy">Hubungkan wallet untuk membaca balance real-time.</p>}
             {wallet.connected && !isGiwa && <button className="button button-outline full-width" onClick={() => void handleSwitchNetwork()}>Switch ke GIWA Sepolia <ChevronRight size={15} /></button>}
-            {!wallet.connected && <div className="wallet-connect-stack"><button className="button button-primary full-width" onClick={() => void handleConnect()} disabled={!hasInjectedWallet()}>{hasInjectedWallet() ? 'Connect browser wallet' : 'Buka dApp di Klever browser'} <Link2 size={15} /></button><button className="button button-klever full-width" onClick={() => void handleConnectKlever()} disabled={!hasWalletConnectConfig()}><Smartphone size={15} /> Connect Klever Android <span className="wc-label">WalletConnect</span></button>{!hasWalletConnectConfig() && <div className="micro-note">Set <span className="mono">VITE_WALLETCONNECT_PROJECT_ID</span> untuk mengaktifkan QR/deep-link Klever.</div>}</div>}
+            {!wallet.connected && <div className="wallet-connect-stack"><button className="button button-primary full-width" onClick={() => void handleConnect()}>{hasInjectedWallet() ? 'Connect browser wallet' : 'Open in Klever dApp browser'} <Link2 size={15} /></button><button className="button button-klever full-width" onClick={() => void handleConnectKlever()}><Smartphone size={15} /> Connect Klever Android <span className="wc-label">WalletConnect</span></button>{!hasWalletConnectConfig() && <div className="micro-note">WalletConnect belum aktif di deployment: set <span className="mono">VITE_WALLETCONNECT_PROJECT_ID</span>.</div>}</div>}
           </section>
 
           <div className="sidebar-footer"><span className="mono">RPC</span><span className="mono truncate">{GIWA_RPC_URL}</span></div>
