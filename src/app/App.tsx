@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Activity, ArrowUpRight, Check, ChevronRight, Clipboard, Copy, Download, ExternalLink, KeyRound, Link2, LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Wallet, Wifi, XCircle, Zap } from 'lucide-react'
 import { formatEther, parseUnits } from 'viem'
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { GIWA_EXPLORER_URL, explorerAddressUrl } from '../lib/giwa'
 import { createEncryptedWalletBackup, downloadEncryptedWallet } from '../lib/keystore'
 import { formatEth, formatTime, shortenAddress, chainLabel } from '../lib/format'
@@ -18,6 +19,27 @@ function createActivity(input: Omit<ActivityRecord, 'id' | 'createdAt'>): Activi
   return { ...input, id: crypto.randomUUID(), createdAt: new Date().toISOString() }
 }
 
+function buildTransactionTrend(activities: ActivityRecord[], now: Date) {
+  const bucketSize = 5_000
+  const points = 12
+  const currentBucket = Math.floor(now.getTime() / bucketSize) * bucketSize
+
+  return Array.from({ length: points }, (_, index) => {
+    const bucketStart = currentBucket - (points - index - 1) * bucketSize
+    const bucketEnd = bucketStart + bucketSize
+    const transactions = activities.filter((activity) => {
+      if (activity.kind !== 'transaction') return false
+      const createdAt = new Date(activity.createdAt).getTime()
+      return createdAt >= bucketStart && createdAt < bucketEnd
+    }).length
+
+    return {
+      label: new Date(bucketStart).toLocaleTimeString('id-ID', { minute: '2-digit', second: '2-digit' }),
+      transactions,
+    }
+  })
+}
+
 function App() {
   const [wallet, setWallet] = useState<WalletState>(initialWallet)
   const [balance, setBalance] = useState<BalanceState>(initialBalance)
@@ -33,6 +55,7 @@ function App() {
   const [deploySymbol, setDeploySymbol] = useState('GTT')
   const [deploySupply, setDeploySupply] = useState('1000000')
   const [deployBusy, setDeployBusy] = useState(false)
+  const [trendNow, setTrendNow] = useState(() => new Date())
 
   const addActivity = useCallback((activity: Omit<ActivityRecord, 'id' | 'createdAt'>) => {
     setActivities((current) => {
@@ -96,7 +119,14 @@ function App() {
     return () => window.clearInterval(timer)
   }, [wallet.address, wallet.chainId, refreshBalance])
 
+  useEffect(() => {
+    const timer = window.setInterval(() => setTrendNow(new Date()), 5000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   const selectedNetwork = getNetwork(selectedNetworkId)
+  const transactionTrend = useMemo(() => buildTransactionTrend(activities, trendNow), [activities, trendNow])
+  const transactionTotal = useMemo(() => activities.filter((activity) => activity.kind === 'transaction').length, [activities])
   const isSelectedChain = wallet.chainId === selectedNetwork.chainId
   const statusLabel = wallet.connected ? (isSelectedChain ? `LIVE / ${selectedNetwork.shortName}` : 'NETWORK REVIEW') : 'WALLET OFFLINE'
   const statusTone = wallet.connected && isSelectedChain ? 'live' : wallet.connected ? 'warn' : 'idle'
@@ -306,6 +336,32 @@ function App() {
               <div className="guardrail"><ShieldCheck size={16} /><span>Swap hanya dapat diaktifkan setelah router resmi/terverifikasi masuk registry.</span></div>
             </section>
           </div>
+
+          <section className="panel trend-panel">
+            <div className="trend-heading">
+              <div className="panel-heading"><div className="icon-tile lime"><Activity size={17} /></div><div><div className="eyebrow">TRANSACTION PULSE / 06</div><h3>Live transaction trend</h3></div></div>
+              <div className="trend-stat"><strong>{transactionTotal.toString().padStart(2, '0')}</strong><span>ALL TIME<br />SUBMITTED</span></div>
+            </div>
+            <p className="panel-copy">Aktivitas deployment yang dikirim dari sesi browser ini, dikelompokkan per 5 detik selama 1 menit terakhir.</p>
+            <div className="trend-chart" aria-label="Grafik tren transaksi real-time">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={transactionTrend} margin={{ top: 10, right: 8, left: -22, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="transactionGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#b9ef69" stopOpacity={0.34} />
+                      <stop offset="100%" stopColor="#b9ef69" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="rgba(204,220,238,.08)" strokeDasharray="3 5" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fill: '#66758a', fontSize: 9, fontFamily: 'DM Mono' }} tickLine={false} axisLine={false} interval={2} />
+                  <YAxis allowDecimals={false} tick={{ fill: '#66758a', fontSize: 9, fontFamily: 'DM Mono' }} tickLine={false} axisLine={false} width={28} />
+                  <Tooltip contentStyle={{ border: '1px solid rgba(204,220,238,.16)', borderRadius: 9, background: '#131d2b', color: '#eef2f6', fontFamily: 'DM Mono', fontSize: 10 }} labelStyle={{ color: '#8290a4' }} cursor={{ stroke: 'rgba(185,239,105,.3)' }} />
+                  <Area type="monotone" dataKey="transactions" name="Transactions" stroke="#b9ef69" strokeWidth={2} fill="url(#transactionGradient)" isAnimationActive={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="trend-footer"><span><span className="signal-dot" /> AUTO REFRESH / 5S</span><span className="mono">{selectedNetwork.shortName} · LOCAL SESSION</span></div>
+          </section>
 
           <section className="panel backup-panel">
             <div className="backup-layout"><div className="panel-heading"><div className="icon-tile violet"><KeyRound size={17} /></div><div><div className="eyebrow">LOCAL WALLET LAB / 04</div><h3>Encrypted wallet backup</h3></div></div><div className="backup-tag"><Download size={14} /> browser-only</div></div>
