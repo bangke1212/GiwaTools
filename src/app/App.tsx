@@ -6,7 +6,7 @@ import { createEncryptedWalletBackup, downloadEncryptedWallet } from '../lib/key
 import { formatEth, formatTime, shortenAddress, chainLabel } from '../lib/format'
 import { readActivities, writeActivities } from '../lib/storage'
 import { generateTokenIdentity } from '../lib/token-names'
-import { connectInjectedWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, switchToGiwaSepolia } from '../lib/wallet'
+import { connectInjectedWallet, connectMetaMaskWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, hasMetaMaskWallet, switchToGiwaSepolia } from '../lib/wallet'
 import type { ActivityRecord, BalanceState, WalletState } from '../types/wallet'
 
 const initialWallet: WalletState = { address: null, chainId: null, connected: false, source: null, error: null }
@@ -99,7 +99,7 @@ function App() {
 
   async function handleConnect() {
     if (!hasInjectedWallet()) {
-      setNotice({ type: 'info', message: 'Buka URL GiwaTools melalui Klever Wallet > Web3 browser agar provider wallet diinjeksi, atau gunakan tombol WalletConnect Android.' })
+      setNotice({ type: 'info', message: 'Buka URL GiwaTools di MetaMask atau Klever Web3 browser agar provider wallet diinjeksi.' })
       return
     }
     try {
@@ -109,6 +109,19 @@ function App() {
       setNotice({ type: 'success', message: `Wallet ${shortenAddress(connected.address)} terhubung.` })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Wallet gagal terhubung.'
+      setWallet((current) => ({ ...current, error: message }))
+      setNotice({ type: 'error', message })
+    }
+  }
+
+  async function handleConnectMetaMask() {
+    try {
+      const connected = await connectMetaMaskWallet()
+      setWallet({ ...connected, connected: true, error: null })
+      addActivity({ kind: 'wallet', title: 'MetaMask connected', detail: shortenAddress(connected.address), status: 'success' })
+      setNotice({ type: 'success', message: `MetaMask ${shortenAddress(connected.address)} terhubung.` })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'MetaMask gagal terhubung.'
       setWallet((current) => ({ ...current, error: message }))
       setNotice({ type: 'error', message })
     }
@@ -206,7 +219,7 @@ function App() {
               </>
             ) : <p className="empty-copy">Hubungkan wallet untuk membaca balance real-time.</p>}
             {wallet.connected && !isGiwa && <button className="button button-outline full-width" onClick={() => void handleSwitchNetwork()}>Switch ke GIWA Sepolia <ChevronRight size={15} /></button>}
-            {!wallet.connected && <div className="wallet-connect-stack"><button className="button button-primary full-width" onClick={() => void handleConnect()}>{hasInjectedWallet() ? 'Connect Klever langsung' : 'Buka di Klever Web3 browser'} <Link2 size={15} /></button><div className="micro-note"><span className="signal-dot" /> {hasInjectedWallet() ? 'Provider Klever terdeteksi — tekan untuk approval.' : 'Buka URL ini di APK Klever melalui Web3 browser.'}</div></div>}
+            {!wallet.connected && <div className="wallet-connect-stack"><button className="button button-primary full-width" onClick={() => void handleConnectMetaMask()}>{hasMetaMaskWallet() ? 'Connect MetaMask' : 'Buka di MetaMask'} <Link2 size={15} /></button><button className="button button-outline full-width" onClick={() => void handleConnect()}>{hasInjectedWallet() ? 'Connect Klever langsung' : 'Buka di Klever Web3 browser'} <Link2 size={15} /></button><div className="micro-note"><span className="signal-dot" /> MetaMask memakai EIP-1193; Klever memakai provider Web3 browser.</div></div>}
           </section>
 
           <div className="sidebar-footer"><span className="mono">RPC</span><span className="mono truncate">{GIWA_RPC_URL}</span></div>

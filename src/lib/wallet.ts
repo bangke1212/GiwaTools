@@ -9,6 +9,8 @@ type RequestArgs = {
 
 export type InjectedProvider = {
   request: (args: RequestArgs) => Promise<unknown>
+  isMetaMask?: boolean
+  providers?: InjectedProvider[]
   on?: (event: string, handler: (...args: unknown[]) => void) => void
   removeListener?: (event: string, handler: (...args: unknown[]) => void) => void
 }
@@ -31,6 +33,11 @@ let walletConnectProvider: Awaited<ReturnType<typeof EthereumProvider.init>> | n
 
 export const getInjectedProvider = () => (typeof window === 'undefined' ? undefined : window.ethereum)
 export const hasInjectedWallet = () => typeof window !== 'undefined' && Boolean(window.ethereum)
+export const getMetaMaskProvider = () => {
+  const provider = getInjectedProvider()
+  return provider?.providers?.find((candidate) => candidate.isMetaMask) || (provider?.isMetaMask ? provider : undefined)
+}
+export const hasMetaMaskWallet = () => Boolean(getMetaMaskProvider())
 export const getWalletConnectProjectId = () => (import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '').trim()
 export const hasWalletConnectConfig = () => getWalletConnectProjectId().length > 0
 
@@ -42,6 +49,18 @@ export async function connectInjectedWallet(): Promise<WalletConnection> {
   const chainHex = (await provider.request({ method: 'eth_chainId' })) as string
   const address = accounts[0]
   if (!address) throw new Error('Wallet tidak mengembalikan address.')
+
+  return { address: address as `0x${string}`, chainId: Number.parseInt(chainHex, 16), source: 'injected' }
+}
+
+export async function connectMetaMaskWallet(): Promise<WalletConnection> {
+  const provider = getMetaMaskProvider()
+  if (!provider) throw new Error('MetaMask belum terdeteksi. Pasang extension MetaMask atau buka dApp dari browser MetaMask.')
+
+  const accounts = (await provider.request({ method: 'eth_requestAccounts' })) as string[]
+  const chainHex = (await provider.request({ method: 'eth_chainId' })) as string
+  const address = accounts[0]
+  if (!address) throw new Error('MetaMask tidak mengembalikan address.')
 
   return { address: address as `0x${string}`, chainId: Number.parseInt(chainHex, 16), source: 'injected' }
 }
