@@ -1,19 +1,20 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowUpRight, Check, ChevronRight, Clipboard, Copy, Download, ExternalLink, KeyRound, Link2, LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Wallet, Wifi, XCircle, Zap } from 'lucide-react'
-import { formatEther, parseUnits } from 'viem'
+import { Activity, ArrowUpRight, Check, ChevronRight, Clipboard, Coins, Copy, Download, ExternalLink, KeyRound, Link2, LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Wallet, Wifi, XCircle, Zap } from 'lucide-react'
+import { formatEther, formatUnits, parseUnits } from 'viem'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { GIWA_EXPLORER_URL, explorerAddressUrl } from '../lib/giwa'
 import { createEncryptedWalletBackup, downloadEncryptedWallet } from '../lib/keystore'
 import { formatEth, formatTime, shortenAddress, chainLabel } from '../lib/format'
-import { readActivities, writeActivities } from '../lib/storage'
+import { readActivities, readTrackedToken, writeActivities, writeTrackedToken, type TrackedToken } from '../lib/storage'
 import { generateTokenIdentity } from '../lib/token-names'
-import { connectInjectedWallet, connectMetaMaskMobileWallet, connectMetaMaskWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, hasMetaMaskWallet, getWalletClientForNetwork, switchToNetwork } from '../lib/wallet'
+import { connectInjectedWallet, connectMetaMaskMobileWallet, connectMetaMaskWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, getWalletClientForNetwork, switchToNetwork } from '../lib/wallet'
 import type { ActivityRecord, BalanceState, WalletState } from '../types/wallet'
 import { APP_NETWORKS, appNetworkChains, getNetwork, getPublicClient, type AppNetworkId } from '../lib/networks'
 import { TOKEN_CONTRACT_ABI, TOKEN_CONTRACT_BYTECODE } from '../lib/token-contract'
 
 const initialWallet: WalletState = { address: null, chainId: null, connected: false, source: null, error: null }
 const initialBalance: BalanceState = { eth: '0', blockNumber: null, updatedAt: null, loading: false, error: null }
+const initialTokenBalance = { amount: '0', updatedAt: null as Date | null, loading: false, error: null as string | null }
 
 function createActivity(input: Omit<ActivityRecord, 'id' | 'createdAt'>): ActivityRecord {
   return { ...input, id: crypto.randomUUID(), createdAt: new Date().toISOString() }
@@ -43,6 +44,8 @@ function buildTransactionTrend(activities: ActivityRecord[], now: Date) {
 function App() {
   const [wallet, setWallet] = useState<WalletState>(initialWallet)
   const [balance, setBalance] = useState<BalanceState>(initialBalance)
+  const [trackedToken, setTrackedToken] = useState<TrackedToken | null>(() => readTrackedToken())
+  const [tokenBalance, setTokenBalance] = useState(initialTokenBalance)
   const [token, setToken] = useState(generateTokenIdentity)
   const [activities, setActivities] = useState<ActivityRecord[]>(() => readActivities())
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
@@ -97,6 +100,27 @@ function App() {
     }
   }, [wallet.address, selectedNetworkId])
 
+  const refreshTokenBalance = useCallback(async (address = wallet.address) => {
+    if (!address || !trackedToken) return
+    if (trackedToken.networkId !== selectedNetworkId) {
+      setTokenBalance((current) => ({ ...current, loading: false, error: `Token berada di ${getNetwork(trackedToken.networkId).shortName}.` }))
+      return
+    }
+    setTokenBalance((current) => ({ ...current, loading: true, error: null }))
+    try {
+      const rawBalance = await getPublicClient(selectedNetworkId).readContract({
+        address: trackedToken.address,
+        abi: TOKEN_CONTRACT_ABI,
+        functionName: 'balanceOf',
+        args: [address],
+      }) as bigint
+      setTokenBalance({ amount: formatUnits(rawBalance, trackedToken.decimals), updatedAt: new Date(), loading: false, error: null })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Saldo token belum dapat dibaca dari RPC.'
+      setTokenBalance((current) => ({ ...current, loading: false, error: message }))
+    }
+  }, [wallet.address, selectedNetworkId, trackedToken])
+
   useEffect(() => {
     void refreshWallet()
     const provider = getInjectedProvider()
@@ -118,6 +142,13 @@ function App() {
     const timer = window.setInterval(() => void refreshBalance(wallet.address), 5000)
     return () => window.clearInterval(timer)
   }, [wallet.address, wallet.chainId, refreshBalance])
+
+  useEffect(() => {
+    if (!wallet.address || !trackedToken) return
+    void refreshTokenBalance(wallet.address)
+    const timer = window.setInterval(() => void refreshTokenBalance(wallet.address), 5000)
+    return () => window.clearInterval(timer)
+  }, [wallet.address, wallet.chainId, trackedToken, refreshTokenBalance])
 
   useEffect(() => {
     const timer = window.setInterval(() => setTrendNow(new Date()), 5000)
@@ -156,6 +187,22 @@ function App() {
       addActivity({ kind: 'transaction', title: 'Token deployment submitted', detail: `${deployName.trim()} / ${selectedNetwork.name}`, status: 'pending', txHash: hash })
       setNotice({ type: 'success', message: `Transaksi deploy dikirim: ${hash.slice(0, 12)}…` })
       setActiveView('dashboard')
+      const deploymentNetworkId = selectedNetworkId
+      void getPublicClient(deploymentNetworkId).waitForTransactionReceipt({ hash }).then((receipt) => {
+        if (!receipt.contractAddress) return
+        const nextToken: TrackedToken = {
+          address: receipt.contractAddress,
+          networkId: deploymentNetworkId,
+          name: deployName.trim(),
+          symbol: deploySymbol.trim().toUpperCase(),
+          decimals: 18,
+        }
+        writeTrackedToken(nextToken)
+        setTrackedToken(nextToken)
+        setNotice({ type: 'success', message: `${nextToken.symbol} aktif. Saldo token akan diperbarui otomatis.` })
+      }).catch(() => {
+        setNotice({ type: 'info', message: 'Deploy terkirim, tetapi receipt belum dapat dibaca. Saldo token akan tersedia setelah deployment dikonfirmasi.' })
+      })
     } catch (error) {
       setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Deploy token gagal atau ditolak wallet.' })
     } finally { setDeployBusy(false) }
@@ -293,6 +340,18 @@ function App() {
             </div>
             {balance.loading && <div className="read-line"><RefreshCw size={12} className="spin" /> membaca RPC GIWA…</div>}
             {balance.error && <div className="inline-error">{balance.error}</div>}
+          </section>
+
+          <section className="token-balance-card">
+            <div className="section-kicker"><Coins size={14} /> TRACKED TOKEN</div>
+            {trackedToken ? <>
+              <div className="token-balance-top"><div><strong>{trackedToken.symbol}</strong><span>{trackedToken.name}</span></div><span className="token-network">{getNetwork(trackedToken.networkId).shortName}</span></div>
+              <div className="token-balance-value">{Number(tokenBalance.amount).toLocaleString('id-ID', { maximumFractionDigits: 4 })}<span> {trackedToken.symbol}</span></div>
+              <div className="status-caption">Wallet balance <span className="mono">/ auto read 5s</span></div>
+              {tokenBalance.loading && <div className="read-line"><RefreshCw size={12} className="spin" /> membaca token…</div>}
+              {tokenBalance.error && <div className="inline-error">{tokenBalance.error}</div>}
+              {!wallet.address && <div className="micro-note"><span className="signal-dot" /> Hubungkan MetaMask untuk membaca saldo.</div>}
+            </> : <p className="empty-copy">Deploy token dari menu Deploy Token untuk mulai melacak saldonya.</p>}
           </section>
 
           <section className="wallet-card">

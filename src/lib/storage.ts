@@ -1,6 +1,16 @@
 import type { ActivityRecord } from '../types/wallet'
+import type { AppNetworkId } from './networks'
 
 const ACTIVITY_KEY = 'giwatools.activity.v1'
+const TRACKED_TOKEN_KEY = 'giwatools.tracked-token.v1'
+
+export type TrackedToken = {
+  address: `0x${string}`
+  networkId: AppNetworkId
+  name: string
+  symbol: string
+  decimals: number
+}
 
 export function readActivities(): ActivityRecord[] {
   try {
@@ -13,4 +23,17 @@ export function readActivities(): ActivityRecord[] {
 
 export function writeActivities(items: ActivityRecord[]) {
   localStorage.setItem(ACTIVITY_KEY, JSON.stringify(items.slice(0, 20)))
+}
+
+export function readTrackedToken(): TrackedToken | null {
+  try {
+    const raw = localStorage.getItem(TRACKED_TOKEN_KEY)
+    return raw ? (JSON.parse(raw) as TrackedToken) : null
+  } catch {
+    return null
+  }
+}
+
+export function writeTrackedToken(token: TrackedToken) {
+  localStorage.setItem(TRACKED_TOKEN_KEY, JSON.stringify(token))
 }
