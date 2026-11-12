@@ -16,6 +16,11 @@ export type InjectedProvider = {
   removeListener?: (event: string, handler: (...args: unknown[]) => void) => void
 }
 
+type AnnouncedProvider = {
+  info?: { rdns?: string; name?: string }
+  provider?: InjectedProvider
+}
+
 export type WalletSource = 'injected' | 'metamask' | 'walletconnect'
 
 type WalletConnection = {
@@ -32,12 +37,32 @@ declare global {
 
 let walletConnectProvider: Awaited<ReturnType<typeof EthereumProvider.init>> | null = null
 let metaMaskMobileClient: Awaited<ReturnType<typeof createEVMClient>> | null = null
+let announcedMetaMaskProvider: InjectedProvider | null = null
+let metaMaskDiscoveryStarted = false
+let metaMaskRequestInFlight = false
 
 export const getInjectedProvider = () => (typeof window === 'undefined' ? undefined : window.ethereum)
 export const hasInjectedWallet = () => typeof window !== 'undefined' && Boolean(window.ethereum)
+
+function isMetaMaskAnnouncement(detail: AnnouncedProvider) {
+  const rdns = detail.info?.rdns || ''
+  return Boolean(detail.provider?.isMetaMask) || rdns === 'io.metamask' || rdns === 'io.metamask.flask'
+}
+
+function startMetaMaskDiscovery() {
+  if (typeof window === 'undefined' || metaMaskDiscoveryStarted) return
+  metaMaskDiscoveryStarted = true
+
+  window.addEventListener('eip6963:announceProvider', ((event: CustomEvent<AnnouncedProvider>) => {
+    if (isMetaMaskAnnouncement(event.detail) && event.detail.provider) announcedMetaMaskProvider = event.detail.provider
+  }) as EventListener)
+  window.dispatchEvent(new Event('eip6963:requestProvider'))
+}
+
 export const getMetaMaskProvider = () => {
+  startMetaMaskDiscovery()
   const provider = getInjectedProvider()
-  return provider?.providers?.find((candidate) => candidate.isMetaMask) || (provider?.isMetaMask ? provider : undefined)
+  return announcedMetaMaskProvider || provider?.providers?.find((candidate) => candidate.isMetaMask) || (provider?.isMetaMask ? provider : undefined)
 }
 export const hasMetaMaskWallet = () => Boolean(getMetaMaskProvider())
 export const getWalletConnectProjectId = () => (import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '').trim()
@@ -56,15 +81,29 @@ export async function connectInjectedWallet(): Promise<WalletConnection> {
 }
 
 export async function connectMetaMaskWallet(): Promise<WalletConnection> {
-  const provider = getMetaMaskProvider()
+  startMetaMaskDiscovery()
+  let provider = getMetaMaskProvider()
+  if (!provider) {
+    await new Promise((resolve) => window.setTimeout(resolve, 150))
+    provider = getMetaMaskProvider()
+  }
   if (!provider) throw new Error('MetaMask belum terdeteksi. Pasang extension MetaMask atau buka dApp dari browser MetaMask.')
+  if (metaMaskRequestInFlight) throw new Error('Popup MetaMask masih terbuka. Selesaikan atau tutup popup tersebut terlebih dahulu.')
 
-  const accounts = (await provider.request({ method: 'eth_requestAccounts' })) as string[]
-  const chainHex = (await provider.request({ method: 'eth_chainId' })) as string
-  const address = accounts[0]
-  if (!address) throw new Error('MetaMask tidak mengembalikan address.')
+  metaMaskRequestInFlight = true
+  try {
+    const accounts = (await provider.request({ method: 'eth_requestAccounts' })) as string[]
+    const chainHex = (await provider.request({ method: 'eth_chainId' })) as string
+    const address = accounts[0]
+    if (!address) throw new Error('MetaMask tidak mengembalikan address.')
 
-  return { address: address as `0x${string}`, chainId: Number.parseInt(chainHex, 16), source: 'injected' }
+    return { address: address as `0x${string}`, chainId: Number.parseInt(chainHex, 16), source: 'metamask' }
+  } catch (error) {
+    if ((error as { code?: number }).code === -32002) throw new Error('Popup MetaMask sedang menunggu respons. Buka MetaMask dari ikon extension lalu selesaikan permintaan koneksi.')
+    throw error
+  } finally {
+    metaMaskRequestInFlight = false
+  }
 }
 
 
@@ -133,6 +172,15 @@ export async function getConnectedWallet(): Promise<WalletConnection | null> {
     }
   }
 
+  const metaMaskProvider = getMetaMaskProvider()
+  if (metaMaskProvider) {
+    const accounts = (await metaMaskProvider.request({ method: 'eth_accounts' })) as string[]
+    if (accounts[0]) {
+      const chainHex = (await metaMaskProvider.request({ method: 'eth_chainId' })) as string
+      return { address: accounts[0] as `0x${string}`, chainId: Number.parseInt(chainHex, 16), source: 'metamask' }
+    }
+  }
+
   const provider = getInjectedProvider()
   if (!provider) return null
   const accounts = (await provider.request({ method: 'eth_accounts' })) as string[]
@@ -152,7 +200,7 @@ export async function switchToGiwaSepolia(source: WalletSource = 'injected') {
 }
 
 export async function switchToNetwork(network: { chainId: number; name: string; symbol: string; rpcUrl: string; explorerUrl: string }, source: WalletSource = 'injected') {
-  const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() : getInjectedProvider()
+  const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() || getMetaMaskProvider() : getInjectedProvider()
   if (!provider) throw new Error('Provider wallet belum tersedia.')
 
   try {
@@ -181,13 +229,13 @@ export async function disconnectWallet(source: WalletSource) {
 }
 
 export function getWalletClient(address: `0x${string}`, source: WalletSource = 'injected'): WalletClient | null {
-  const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() : getInjectedProvider()
+  const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() || getMetaMaskProvider() : getInjectedProvider()
   if (!provider) return null
   return createWalletClient({ account: address, chain: giwaSepolia, transport: custom(provider) })
 }
 
 export function getWalletClientForNetwork(address: `0x${string}`, chain: Parameters<typeof createWalletClient>[0]['chain'], source: WalletSource = 'injected'): WalletClient | null {
-  const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() : getInjectedProvider()
+  const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() || getMetaMaskProvider() : getInjectedProvider()
   if (!provider) return null
   return createWalletClient({ account: address, chain, transport: custom(provider) })
 }
