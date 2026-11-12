@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowUpRight, Check, ChevronRight, Clipboard, Copy, Download, ExternalLink, KeyRound, Link2, LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Wallet, Wifi, XCircle, Zap } from 'lucide-react'
+import { Activity, ArrowUpRight, Check, ChevronRight, Clipboard, Copy, Download, ExternalLink, KeyRound, Link2, LockKeyhole, RefreshCw, ShieldCheck, Smartphone, Sparkles, Wallet, Wifi, XCircle, Zap } from 'lucide-react'
 import { formatEther } from 'viem'
 import { GIWA_CHAIN_ID, GIWA_EXPLORER_URL, GIWA_RPC_URL, explorerAddressUrl, publicClient } from '../lib/giwa'
 import { createEncryptedWalletBackup, downloadEncryptedWallet } from '../lib/keystore'
 import { formatEth, formatTime, shortenAddress, chainLabel } from '../lib/format'
 import { readActivities, writeActivities } from '../lib/storage'
 import { generateTokenIdentity } from '../lib/token-names'
-import { connectInjectedWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, switchToGiwaSepolia } from '../lib/wallet'
+import { connectInjectedWallet, connectKleverWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, hasWalletConnectConfig, switchToGiwaSepolia } from '../lib/wallet'
 import type { ActivityRecord, BalanceState, WalletState } from '../types/wallet'
 
-const initialWallet: WalletState = { address: null, chainId: null, connected: false, error: null }
+const initialWallet: WalletState = { address: null, chainId: null, connected: false, source: null, error: null }
 const initialBalance: BalanceState = { eth: '0', blockNumber: null, updatedAt: null, loading: false, error: null }
 
 function createActivity(input: Omit<ActivityRecord, 'id' | 'createdAt'>): ActivityRecord {
@@ -67,14 +67,15 @@ function App() {
   useEffect(() => {
     void refreshWallet()
     const provider = getInjectedProvider()
-    if (!provider?.on) return
     const onAccountsChanged = () => void refreshWallet()
     const onChainChanged = () => void refreshWallet()
-    provider.on('accountsChanged', onAccountsChanged)
-    provider.on('chainChanged', onChainChanged)
+    provider?.on?.('accountsChanged', onAccountsChanged)
+    provider?.on?.('chainChanged', onChainChanged)
+    const timer = window.setInterval(() => void refreshWallet(), 5000)
     return () => {
-      provider.removeListener?.('accountsChanged', onAccountsChanged)
-      provider.removeListener?.('chainChanged', onChainChanged)
+      provider?.removeListener?.('accountsChanged', onAccountsChanged)
+      provider?.removeListener?.('chainChanged', onChainChanged)
+      window.clearInterval(timer)
     }
   }, [refreshWallet])
 
@@ -109,9 +110,22 @@ function App() {
     }
   }
 
+  async function handleConnectKlever() {
+    try {
+      const connected = await connectKleverWallet()
+      setWallet({ ...connected, connected: true, error: null })
+      addActivity({ kind: 'wallet', title: 'Klever Wallet connected', detail: `${shortenAddress(connected.address)} / WalletConnect`, status: 'success' })
+      setNotice({ type: 'success', message: `Klever Wallet ${shortenAddress(connected.address)} terhubung melalui WalletConnect.` })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Klever Wallet gagal terhubung.'
+      setWallet((current) => ({ ...current, error: message }))
+      setNotice({ type: 'error', message })
+    }
+  }
+
   async function handleSwitchNetwork() {
     try {
-      await switchToGiwaSepolia()
+      await switchToGiwaSepolia(wallet.source || 'injected')
       await refreshWallet()
       setNotice({ type: 'success', message: 'GIWA Sepolia dipilih di wallet.' })
     } catch (error) {
@@ -196,11 +210,12 @@ function App() {
             {wallet.connected ? (
               <>
                 <div className="address-row"><span className="mono">{shortenAddress(wallet.address)}</span><button className="icon-button" onClick={() => wallet.address && void copyText(wallet.address, 'Address disalin.')} aria-label="Copy wallet address"><Copy size={14} /></button></div>
+                <div className="wallet-source"><span className="signal-dot" /> {wallet.source === 'walletconnect' ? 'KLEVER WALLET / WALLETCONNECT' : 'INJECTED EVM WALLET'}</div>
                 <a className="sub-link mono" href={wallet.address ? explorerAddressUrl(wallet.address) : '#'} target="_blank" rel="noreferrer">open on explorer <ArrowUpRight size={12} /></a>
               </>
             ) : <p className="empty-copy">Hubungkan wallet untuk membaca balance real-time.</p>}
             {wallet.connected && !isGiwa && <button className="button button-outline full-width" onClick={() => void handleSwitchNetwork()}>Switch ke GIWA Sepolia <ChevronRight size={15} /></button>}
-            {!wallet.connected && <button className="button button-primary full-width" onClick={() => void handleConnect()} disabled={!hasInjectedWallet()}>{hasInjectedWallet() ? 'Connect wallet' : 'Wallet browser tidak ditemukan'} <Link2 size={15} /></button>}
+            {!wallet.connected && <div className="wallet-connect-stack"><button className="button button-primary full-width" onClick={() => void handleConnect()} disabled={!hasInjectedWallet()}>{hasInjectedWallet() ? 'Connect browser wallet' : 'Buka dApp di Klever browser'} <Link2 size={15} /></button><button className="button button-klever full-width" onClick={() => void handleConnectKlever()} disabled={!hasWalletConnectConfig()}><Smartphone size={15} /> Connect Klever Android <span className="wc-label">WalletConnect</span></button>{!hasWalletConnectConfig() && <div className="micro-note">Set <span className="mono">VITE_WALLETCONNECT_PROJECT_ID</span> untuk mengaktifkan QR/deep-link Klever.</div>}</div>}
           </section>
 
           <div className="sidebar-footer"><span className="mono">RPC</span><span className="mono truncate">{GIWA_RPC_URL}</span></div>

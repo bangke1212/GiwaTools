@@ -1,4 +1,5 @@
 packages:
   - .
 
-allowBuilds: {}
+allowBuilds:
+  '@reown/appkit': true

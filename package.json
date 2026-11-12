@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
+    "@walletconnect/ethereum-provider": "^2.26.0",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",

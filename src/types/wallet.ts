@@ -2,6 +2,7 @@ export type WalletState = {
   address: `0x${string}` | null
   chainId: number | null
   connected: boolean
+  source: 'injected' | 'walletconnect' | null
   error: string | null
 }
 
