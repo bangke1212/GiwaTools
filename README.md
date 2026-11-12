@@ -5,6 +5,7 @@ GiwaTools adalah DApp frontend-only untuk GIWA Sepolia Testnet.
 ## Fitur
 
 - Connect wallet EIP-1193 secara non-custodial.
+- Connect MetaMask Android dari Chrome melalui MetaMask Connect EVM deeplink.
 - Connect Klever Wallet Android melalui WalletConnect QR/deep-link.
 - Baca saldo ETH dari GIWA Sepolia secara real-time setiap 5 detik.
 - Generate nama dan simbol token menggunakan CSPRNG browser.
@@ -17,6 +18,8 @@ GiwaTools adalah DApp frontend-only untuk GIWA Sepolia Testnet.
 ## Development
 
 Untuk mengaktifkan tombol Klever Wallet Android, buat project publik di WalletConnect Cloud lalu isi `VITE_WALLETCONNECT_PROJECT_ID` pada environment Vercel/local. Jangan masukkan private key atau seed phrase ke environment variable.
+
+Untuk MetaMask Android, gunakan tombol **Connect MetaMask Android**. Jalur ini memakai MetaMask Connect EVM dan deeplink resmi pada browser mobile, sehingga tidak membutuhkan `window.ethereum` dari Chrome atau WalletConnect Project ID. Tombol **MetaMask extension** tetap memakai provider EIP-1193 langsung di desktop.
 
 Saat dApp dibuka langsung di Klever Wallet dApp browser, tombol browser wallet juga dapat memakai provider EIP-1193 yang diinjeksi wallet. SDK `@klever/connect` native tidak digunakan untuk balance GIWA karena SDK tersebut menargetkan Klever Blockchain dengan address `klv1...`, bukan GIWA Sepolia EVM.
 

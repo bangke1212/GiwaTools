@@ -3,3 +3,4 @@ packages:
 
 allowBuilds:
   '@reown/appkit': true
+  protobufjs: true

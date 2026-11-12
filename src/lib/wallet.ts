@@ -1,3 +1,4 @@
+import { createEVMClient } from '@metamask/connect-evm'
 import EthereumProvider from '@walletconnect/ethereum-provider'
 import { createWalletClient, custom, type WalletClient } from 'viem'
 import { GIWA_CHAIN_ID, giwaSepolia } from './giwa'
@@ -15,7 +16,7 @@ export type InjectedProvider = {
   removeListener?: (event: string, handler: (...args: unknown[]) => void) => void
 }
 
-export type WalletSource = 'injected' | 'walletconnect'
+export type WalletSource = 'injected' | 'metamask' | 'walletconnect'
 
 type WalletConnection = {
   address: `0x${string}`
@@ -30,6 +31,7 @@ declare global {
 }
 
 let walletConnectProvider: Awaited<ReturnType<typeof EthereumProvider.init>> | null = null
+let metaMaskMobileClient: Awaited<ReturnType<typeof createEVMClient>> | null = null
 
 export const getInjectedProvider = () => (typeof window === 'undefined' ? undefined : window.ethereum)
 export const hasInjectedWallet = () => typeof window !== 'undefined' && Boolean(window.ethereum)
@@ -65,6 +67,29 @@ export async function connectMetaMaskWallet(): Promise<WalletConnection> {
   return { address: address as `0x${string}`, chainId: Number.parseInt(chainHex, 16), source: 'injected' }
 }
 
+
+export async function connectMetaMaskMobileWallet(): Promise<WalletConnection> {
+  const chainHex = `0x${GIWA_CHAIN_ID.toString(16)}` as `0x${string}`
+  metaMaskMobileClient ??= await createEVMClient({
+    dapp: {
+      name: 'GiwaTools',
+      url: window.location.origin,
+      iconUrl: `${window.location.origin}/favicon.svg`,
+    },
+    api: {
+      supportedNetworks: { [chainHex]: giwaSepolia.rpcUrls.default.http[0] },
+    },
+    mobile: { useDeeplink: true },
+    ui: { preferExtension: true, showInstallModal: false },
+    analytics: { enabled: false },
+  })
+
+  const connected = await metaMaskMobileClient.connect({ chainIds: [chainHex] })
+  const address = connected.accounts[0]
+  if (!address) throw new Error('MetaMask Mobile tidak mengembalikan address.')
+
+  return { address: address as `0x${string}`, chainId: Number.parseInt(connected.chainId, 16), source: 'metamask' }
+}
 export async function connectKleverWallet(): Promise<WalletConnection> {
   const projectId = getWalletConnectProjectId()
   if (!projectId) throw new Error('WalletConnect belum dikonfigurasi. Tambahkan VITE_WALLETCONNECT_PROJECT_ID dari WalletConnect Cloud.')
@@ -92,6 +117,14 @@ export async function connectKleverWallet(): Promise<WalletConnection> {
 }
 
 export async function getConnectedWallet(): Promise<WalletConnection | null> {
+  if (metaMaskMobileClient) {
+    const accounts = (await metaMaskMobileClient.getProvider().request({ method: 'eth_accounts' })) as string[]
+    if (accounts[0]) {
+      const chainHex = (await metaMaskMobileClient.getProvider().request({ method: 'eth_chainId' })) as string
+      return { address: accounts[0] as `0x${string}`, chainId: Number.parseInt(chainHex, 16), source: 'metamask' }
+    }
+  }
+
   if (walletConnectProvider?.session && walletConnectProvider.accounts?.[0]) {
     return {
       address: walletConnectProvider.accounts[0] as `0x${string}`,
@@ -109,14 +142,14 @@ export async function getConnectedWallet(): Promise<WalletConnection | null> {
 }
 
 export async function switchToGiwaSepolia(source: WalletSource = 'injected') {
-  const provider = source === 'walletconnect' ? walletConnectProvider : getInjectedProvider()
+  const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() : getInjectedProvider()
   if (!provider) throw new Error('Provider wallet belum tersedia.')
 
   try {
     await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: `0x${GIWA_CHAIN_ID.toString(16)}` }] })
   } catch (error) {
     const code = (error as { code?: number }).code
-    if (source === 'walletconnect' || code !== 4902) throw error
+    if (source !== 'injected' || code !== 4902) throw error
     await provider.request({
       method: 'wallet_addEthereumChain',
       params: [{
@@ -138,7 +171,7 @@ export async function disconnectWallet(source: WalletSource) {
 }
 
 export function getWalletClient(address: `0x${string}`, source: WalletSource = 'injected'): WalletClient | null {
-  const provider = source === 'walletconnect' ? walletConnectProvider : getInjectedProvider()
+  const provider = source === 'walletconnect' ? walletConnectProvider : source === 'metamask' ? metaMaskMobileClient?.getProvider() : getInjectedProvider()
   if (!provider) return null
   return createWalletClient({ account: address, chain: giwaSepolia, transport: custom(provider) })
 }

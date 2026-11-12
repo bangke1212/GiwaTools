@@ -6,7 +6,7 @@ import { createEncryptedWalletBackup, downloadEncryptedWallet } from '../lib/key
 import { formatEth, formatTime, shortenAddress, chainLabel } from '../lib/format'
 import { readActivities, writeActivities } from '../lib/storage'
 import { generateTokenIdentity } from '../lib/token-names'
-import { connectInjectedWallet, connectMetaMaskWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, hasMetaMaskWallet, switchToGiwaSepolia } from '../lib/wallet'
+import { connectInjectedWallet, connectMetaMaskMobileWallet, connectMetaMaskWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, hasMetaMaskWallet, switchToGiwaSepolia } from '../lib/wallet'
 import type { ActivityRecord, BalanceState, WalletState } from '../types/wallet'
 
 const initialWallet: WalletState = { address: null, chainId: null, connected: false, source: null, error: null }
@@ -114,6 +114,19 @@ function App() {
     }
   }
 
+  async function handleConnectMetaMaskMobile() {
+    try {
+      const connected = await connectMetaMaskMobileWallet()
+      setWallet({ ...connected, connected: true, error: null })
+      addActivity({ kind: 'wallet', title: 'MetaMask Mobile connected', detail: shortenAddress(connected.address), status: 'success' })
+      setNotice({ type: 'success', message: `MetaMask Mobile ${shortenAddress(connected.address)} terhubung.` })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'MetaMask Mobile gagal terhubung.'
+      setWallet((current) => ({ ...current, error: message }))
+      setNotice({ type: 'error', message })
+    }
+  }
+
   async function handleConnectMetaMask() {
     try {
       const connected = await connectMetaMaskWallet()
@@ -214,12 +227,12 @@ function App() {
             {wallet.connected ? (
               <>
                 <div className="address-row"><span className="mono">{shortenAddress(wallet.address)}</span><button className="icon-button" onClick={() => wallet.address && void copyText(wallet.address, 'Address disalin.')} aria-label="Copy wallet address"><Copy size={14} /></button></div>
-                <div className="wallet-source"><span className="signal-dot" /> {wallet.source === 'walletconnect' ? 'KLEVER WALLET / WALLETCONNECT' : 'INJECTED EVM WALLET'}</div>
+                <div className="wallet-source"><span className="signal-dot" /> {wallet.source === 'walletconnect' ? 'KLEVER WALLET / WALLETCONNECT' : wallet.source === 'metamask' ? 'METAMASK MOBILE CONNECT' : 'INJECTED EVM WALLET'}</div>
                 <a className="sub-link mono" href={wallet.address ? explorerAddressUrl(wallet.address) : '#'} target="_blank" rel="noreferrer">open on explorer <ArrowUpRight size={12} /></a>
               </>
             ) : <p className="empty-copy">Hubungkan wallet untuk membaca balance real-time.</p>}
             {wallet.connected && !isGiwa && <button className="button button-outline full-width" onClick={() => void handleSwitchNetwork()}>Switch ke GIWA Sepolia <ChevronRight size={15} /></button>}
-            {!wallet.connected && <div className="wallet-connect-stack"><button className="button button-primary full-width" onClick={() => void handleConnectMetaMask()}>{hasMetaMaskWallet() ? 'Connect MetaMask' : 'Buka di MetaMask'} <Link2 size={15} /></button><button className="button button-outline full-width" onClick={() => void handleConnect()}>{hasInjectedWallet() ? 'Connect Klever langsung' : 'Buka di Klever Web3 browser'} <Link2 size={15} /></button><div className="micro-note"><span className="signal-dot" /> MetaMask memakai EIP-1193; Klever memakai provider Web3 browser.</div></div>}
+            {!wallet.connected && <div className="wallet-connect-stack"><button className="button button-primary full-width" onClick={() => void handleConnectMetaMaskMobile()}>Connect MetaMask Android <Link2 size={15} /></button><button className="button button-outline full-width" onClick={() => void handleConnectMetaMask()}>{hasMetaMaskWallet() ? 'Connect MetaMask extension' : 'MetaMask direct / extension'} <Link2 size={15} /></button><button className="button button-outline full-width" onClick={() => void handleConnect()}>{hasInjectedWallet() ? 'Connect Klever langsung' : 'Buka di Klever Web3 browser'} <Link2 size={15} /></button><div className="micro-note"><span className="signal-dot" /> Android: tekan tombol pertama untuk membuka MetaMask dan kembali ke GiwaTools.</div></div>}
           </section>
 
           <div className="sidebar-footer"><span className="mono">RPC</span><span className="mono truncate">{GIWA_RPC_URL}</span></div>
