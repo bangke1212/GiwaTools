@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Activity, ArrowUpRight, Check, ChevronRight, Clipboard, Coins, Copy, Download, ExternalLink, KeyRound, Link2, LockKeyhole, RefreshCw, ShieldCheck, Sparkles, Wallet, Wifi, XCircle, Zap } from 'lucide-react'
-import { formatEther, formatUnits, parseUnits } from 'viem'
+import { formatEther, formatUnits, parseAbiItem, parseUnits } from 'viem'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { GIWA_EXPLORER_URL, explorerAddressUrl } from '../lib/giwa'
 import { createEncryptedWalletBackup, downloadEncryptedWallet } from '../lib/keystore'
@@ -9,12 +9,21 @@ import { readActivities, readTrackedToken, writeActivities, writeTrackedToken, t
 import { generateTokenIdentity } from '../lib/token-names'
 import { connectInjectedWallet, connectMetaMaskMobileWallet, connectMetaMaskWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, getWalletClientForNetwork, switchToNetwork } from '../lib/wallet'
 import type { ActivityRecord, BalanceState, WalletState } from '../types/wallet'
-import { APP_NETWORKS, appNetworkChains, getNetwork, getPublicClient, type AppNetworkId } from '../lib/networks'
+import { APP_NETWORKS, appNetworkChains, explorerTxUrlFor, getNetwork, getPublicClient, type AppNetworkId } from '../lib/networks'
 import { TOKEN_CONTRACT_ABI, TOKEN_CONTRACT_BYTECODE } from '../lib/token-contract'
 
 const initialWallet: WalletState = { address: null, chainId: null, connected: false, source: null, error: null }
 const initialBalance: BalanceState = { eth: '0', blockNumber: null, updatedAt: null, loading: false, error: null }
 const initialTokenBalance = { amount: '0', updatedAt: null as Date | null, loading: false, error: null as string | null }
+const TOKEN_TRANSFER_EVENT = parseAbiItem('event Transfer(address indexed from, address indexed to, uint256 value)')
+
+type TokenTransferRecord = {
+  hash: `0x${string}`
+  from: `0x${string}`
+  to: `0x${string}`
+  value: string
+  blockNumber: bigint
+}
 
 function createActivity(input: Omit<ActivityRecord, 'id' | 'createdAt'>): ActivityRecord {
   return { ...input, id: crypto.randomUUID(), createdAt: new Date().toISOString() }
@@ -46,6 +55,9 @@ function App() {
   const [balance, setBalance] = useState<BalanceState>(initialBalance)
   const [trackedToken, setTrackedToken] = useState<TrackedToken | null>(() => readTrackedToken())
   const [tokenBalance, setTokenBalance] = useState(initialTokenBalance)
+  const [tokenTransfers, setTokenTransfers] = useState<TokenTransferRecord[]>([])
+  const [tokenTransfersLoading, setTokenTransfersLoading] = useState(false)
+  const [tokenTransfersError, setTokenTransfersError] = useState<string | null>(null)
   const [token, setToken] = useState(generateTokenIdentity)
   const [activities, setActivities] = useState<ActivityRecord[]>(() => readActivities())
   const [notice, setNotice] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
@@ -121,6 +133,41 @@ function App() {
     }
   }, [wallet.address, selectedNetworkId, trackedToken])
 
+  const refreshTokenHistory = useCallback(async () => {
+    if (!trackedToken) {
+      setTokenTransfers([])
+      return
+    }
+    if (trackedToken.networkId !== selectedNetworkId) {
+      setTokenTransfers([])
+      setTokenTransfersError(`Token berada di ${getNetwork(trackedToken.networkId).shortName}.`)
+      return
+    }
+    setTokenTransfersLoading(true)
+    setTokenTransfersError(null)
+    try {
+      const client = getPublicClient(selectedNetworkId)
+      const latestBlock = await client.getBlockNumber()
+      const fromBlock = latestBlock > 10_000n ? latestBlock - 10_000n : 0n
+      const logs = await client.getLogs({ address: trackedToken.address, event: TOKEN_TRANSFER_EVENT, fromBlock, toBlock: latestBlock })
+      const transfers = logs.slice(-20).reverse().map((log) => {
+        const args = log.args as { from: `0x${string}`; to: `0x${string}`; value: bigint }
+        return {
+          hash: log.transactionHash as `0x${string}`,
+          from: args.from,
+          to: args.to,
+          value: formatUnits(args.value, trackedToken.decimals),
+          blockNumber: log.blockNumber,
+        }
+      })
+      setTokenTransfers(transfers)
+    } catch (error) {
+      setTokenTransfersError(error instanceof Error ? error.message : 'Riwayat transfer belum dapat dibaca dari RPC.')
+    } finally {
+      setTokenTransfersLoading(false)
+    }
+  }, [selectedNetworkId, trackedToken])
+
   useEffect(() => {
     void refreshWallet()
     const provider = getInjectedProvider()
@@ -149,6 +196,12 @@ function App() {
     const timer = window.setInterval(() => void refreshTokenBalance(wallet.address), 5000)
     return () => window.clearInterval(timer)
   }, [wallet.address, wallet.chainId, trackedToken, refreshTokenBalance])
+
+  useEffect(() => {
+    void refreshTokenHistory()
+    const timer = window.setInterval(() => void refreshTokenHistory(), 5000)
+    return () => window.clearInterval(timer)
+  }, [trackedToken, selectedNetworkId, refreshTokenHistory])
 
   useEffect(() => {
     const timer = window.setInterval(() => setTrendNow(new Date()), 5000)
@@ -427,6 +480,15 @@ function App() {
             <p className="panel-copy">Buat wallet testnet baru di browser lalu unduh backup terenkripsi. Private key tidak pernah ditampilkan, tidak diunggah, dan tidak disimpan oleh GiwaTools. Format backup ini khusus GiwaTools.</p>
             <div className="backup-form"><label><span className="field-label">PASSWORD / MIN 12 CHAR</span><input type="password" value={backupPassword} onChange={(event) => setBackupPassword(event.target.value)} placeholder="Password kuat untuk file backup" autoComplete="new-password" /></label><label><span className="field-label">CONFIRM PASSWORD</span><input type="password" value={backupPasswordAgain} onChange={(event) => setBackupPasswordAgain(event.target.value)} placeholder="Ulangi password" autoComplete="new-password" /></label><button className="button button-primary backup-button" onClick={() => void handleBackup()} disabled={backupBusy}>{backupBusy ? <><RefreshCw size={15} className="spin" /> encrypting…</> : <><Download size={15} /> Generate & download</>}</button></div>
             <div className="micro-note warning-note"><ShieldCheck size={13} /> Jangan unggah file backup atau password ke GitHub, Vercel, chat, atau siapa pun.</div>
+          </section>
+
+          <section className="panel token-history-panel">
+            <div className="activity-head token-history-head"><div><div className="eyebrow">ON-CHAIN LEDGER / 08</div><h3>{trackedToken ? `${trackedToken.symbol} transaction history` : 'Token transaction history'}</h3></div><span className="mono muted">{tokenTransfers.length.toString().padStart(2, '0')} TRANSFERS</span></div>
+            <p className="panel-copy">Event <span className="mono">Transfer</span> dari kontrak token terpantau, diambil langsung dari 10.000 block terakhir dan diperbarui setiap 5 detik.</p>
+            {tokenTransfersLoading && <div className="read-line"><RefreshCw size={12} className="spin" /> membaca event Transfer…</div>}
+            {tokenTransfersError && <div className="inline-error">{tokenTransfersError}</div>}
+            {!trackedToken ? <div className="empty-state"><Activity size={18} /><span>Deploy token terlebih dahulu untuk membuka riwayat transfer on-chain.</span></div> : tokenTransfers.length === 0 && !tokenTransfersLoading ? <div className="empty-state"><Activity size={18} /><span>Belum ada event transfer pada rentang block yang dibaca.</span></div> : <div className="token-history-list">{tokenTransfers.map((transfer) => <div className="token-history-row" key={`${transfer.hash}-${transfer.from}-${transfer.to}`}><div className="token-history-icon"><ArrowUpRight size={14} /></div><div className="token-history-copy"><strong>{Number(transfer.value).toLocaleString('id-ID', { maximumFractionDigits: 4 })} {trackedToken.symbol}</strong><span><span className="mono">{shortenAddress(transfer.from)}</span> <ChevronRight size={11} /> <span className="mono">{shortenAddress(transfer.to)}</span></span></div><div className="token-history-meta"><span className="mono">BLOCK {transfer.blockNumber.toString()}</span><a href={explorerTxUrlFor(trackedToken.networkId, transfer.hash)} target="_blank" rel="noreferrer">VIEW TX <ExternalLink size={11} /></a></div></div>)}</div>}
+            {trackedToken && <div className="trend-footer token-history-footer"><span><span className="signal-dot" /> LIVE RPC INDEX</span><span className="mono">{getNetwork(trackedToken.networkId).shortName} · LAST 10K BLOCKS</span></div>}
           </section>
 
           <section className="activity-section"><div className="activity-head"><div><div className="eyebrow">LOCAL ACTIVITY / 05</div><h3>Recent signals</h3></div><span className="mono muted">{activities.length.toString().padStart(2, '0')} EVENTS</span></div>{activities.length === 0 ? <div className="empty-state"><Activity size={18} /><span>Belum ada aktivitas. Connect wallet atau generate token untuk mulai.</span></div> : <div className="activity-list">{activities.slice(0, 6).map((item) => <div className="activity-row" key={item.id}><span className={`activity-icon ${item.status}`}>{item.status === 'success' ? <Check size={14} /> : item.status === 'error' ? <XCircle size={14} /> : <Activity size={14} />}</span><div className="activity-copy"><strong>{item.title}</strong><span>{item.detail}</span></div><time className="mono">{formatTime(item.createdAt)}</time></div>)}</div>}</section>
