@@ -1,6 +1,8 @@
 # GiwaTools
 
-GiwaTools adalah DApp frontend-only untuk GIWA Sepolia Testnet.
+GiwaTools adalah DApp frontend-only untuk tooling testnet GIWA dan Ethereum Sepolia.
+
+Deployment token ERC-20 secara eksplisit menggunakan **Ethereum Sepolia** (chain ID `11155111`, gas ETH), sesuai rekomendasi Ethereum untuk pengembangan aplikasi. GIWA Sepolia (chain ID `91342`) tetap dapat dipilih untuk membaca balance dan data L2, tetapi bukan target deploy token pada form deployment.
 
 ## Fitur
 
@@ -14,6 +16,7 @@ GiwaTools adalah DApp frontend-only untuk GIWA Sepolia Testnet.
 - Tidak ada private key mentah yang ditampilkan, dikirim, atau disimpan.
 - Tidak ada arbitrary calldata dan tidak ada backend signer.
 - Swap sengaja belum diaktifkan sampai router resmi/terverifikasi tersedia.
+- Deployment memverifikasi chain wallet, memeriksa saldo gas, menunggu receipt final, dan hanya melacak kontrak jika receipt berstatus sukses.
 
 ## Development
 

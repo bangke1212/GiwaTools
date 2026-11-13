@@ -2,6 +2,9 @@ import { createPublicClient, defineChain, http, type PublicClient } from 'viem'
 
 export type AppNetworkId = 'ethereum-sepolia' | 'bsc-testnet' | 'giwa-testnet'
 
+/** Token deployments intentionally target Ethereum Sepolia (L1). Other networks remain available for reads and tooling. */
+export const TOKEN_DEPLOYMENT_NETWORK_ID: AppNetworkId = 'ethereum-sepolia'
+
 export type AppNetwork = {
   id: AppNetworkId
   name: string

@@ -6,6 +6,6 @@ GiwaTools menyediakan tiga target testnet dalam menu **Networks**.
 - **BNB Smart Chain Testnet** — chain ID `97`, simbol `tBNB`, RPC `https://data-seed-prebsc-1-s1.bnbchain.org:8545`, explorer `https://testnet.bscscan.com`. Parameter chain ID, RPC, simbol, dan explorer berasal dari dokumentasi resmi BNB Chain: https://docs.bnbchain.org/bnb-smart-chain/developers/wallet-configuration/.
 - **GIWA Testnet** — chain ID `91342`, simbol `ETH`, RPC `https://sepolia-rpc.giwa.io`, explorer `https://sepolia-explorer.giwa.io`. Parameter berasal dari dokumentasi koneksi GIWA: https://docs.giwa.io/get-started/connect-to-giwa.md.
 
-Ethereum.org menjelaskan Sepolia sebagai testnet yang direkomendasikan untuk pengembangan aplikasi dan smart contract: https://ethereum.org/developers/docs/networks/.
+Ethereum.org menjelaskan Sepolia sebagai testnet yang direkomendasikan untuk pengembangan aplikasi dan smart contract: https://ethereum.org/developers/docs/networks/. Karena permintaan deployment token aplikasi ini menargetkan Ethereum Sepolia, tombol deploy selalu memakai chain ID `11155111` dan gas ETH. GIWA Sepolia (`91342`) tetap tersedia sebagai L2 terpisah untuk membaca data dan tooling; aplikasi tidak lagi melakukan deploy token ke GIWA secara diam-diam hanya karena network terakhir dipilih.
 
 Semua target di aplikasi diberi label testnet. Pengguna tetap perlu menyediakan token gas dari faucet masing-masing network sebelum switch atau deploy.

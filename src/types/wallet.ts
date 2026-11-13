@@ -14,7 +14,7 @@ export type BalanceState = {
   error: string | null
 }
 
-export type ActivityStatus = 'info' | 'pending' | 'success' | 'error'
+export type ActivityStatus = 'info' | 'pending' | 'submitted' | 'confirmed' | 'success' | 'error' | 'failed' | 'cancelled'
 
 export type ActivityRecord = {
   id: string

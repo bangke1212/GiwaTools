@@ -5,11 +5,11 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { GIWA_EXPLORER_URL, explorerAddressUrl } from '../lib/giwa'
 import { createEncryptedWalletBackup, downloadEncryptedWallet } from '../lib/keystore'
 import { formatEth, formatTime, shortenAddress, chainLabel } from '../lib/format'
-import { readActivities, readTrackedToken, writeActivities, writeTrackedToken, type TrackedToken } from '../lib/storage'
+import { readActivities, readTrackedToken, updateActivity, writeActivities, writeTrackedToken, type TrackedToken } from '../lib/storage'
 import { generateTokenIdentity } from '../lib/token-names'
 import { connectInjectedWallet, connectMetaMaskMobileWallet, connectMetaMaskWallet, getConnectedWallet, getInjectedProvider, hasInjectedWallet, getWalletClientForNetwork, switchToNetwork } from '../lib/wallet'
 import type { ActivityRecord, BalanceState, WalletState } from '../types/wallet'
-import { APP_NETWORKS, appNetworkChains, explorerTxUrlFor, getNetwork, getPublicClient, type AppNetworkId } from '../lib/networks'
+import { APP_NETWORKS, appNetworkChains, explorerTxUrlFor, getNetwork, getPublicClient, TOKEN_DEPLOYMENT_NETWORK_ID, type AppNetworkId } from '../lib/networks'
 import { TOKEN_CONTRACT_ABI, TOKEN_CONTRACT_BYTECODE } from '../lib/token-contract'
 
 const initialWallet: WalletState = { address: null, chainId: null, connected: false, source: null, error: null }
@@ -65,7 +65,7 @@ function App() {
   const [backupPasswordAgain, setBackupPasswordAgain] = useState('')
   const [backupBusy, setBackupBusy] = useState(false)
   const [activeView, setActiveView] = useState<'dashboard' | 'networks' | 'deploy'>('dashboard')
-  const [selectedNetworkId, setSelectedNetworkId] = useState<AppNetworkId>('giwa-testnet')
+  const [selectedNetworkId, setSelectedNetworkId] = useState<AppNetworkId>('ethereum-sepolia')
   const [deployName, setDeployName] = useState('Giwa Test Token')
   const [deploySymbol, setDeploySymbol] = useState('GTT')
   const [deploySupply, setDeploySupply] = useState('1000000')
@@ -73,11 +73,17 @@ function App() {
   const [trendNow, setTrendNow] = useState(() => new Date())
 
   const addActivity = useCallback((activity: Omit<ActivityRecord, 'id' | 'createdAt'>) => {
+    const record = createActivity(activity)
     setActivities((current) => {
-      const next = [createActivity(activity), ...current].slice(0, 20)
+      const next = [record, ...current].slice(0, 20)
       writeActivities(next)
       return next
     })
+    return record.id
+  }, [])
+
+  const patchActivity = useCallback((id: string, patch: Partial<Omit<ActivityRecord, 'id' | 'createdAt'>>) => {
+    setActivities(updateActivity(id, patch))
   }, [])
 
   const refreshWallet = useCallback(async () => {
@@ -209,6 +215,7 @@ function App() {
   }, [])
 
   const selectedNetwork = getNetwork(selectedNetworkId)
+  const deploymentNetwork = getNetwork(TOKEN_DEPLOYMENT_NETWORK_ID)
   const transactionTrend = useMemo(() => buildTransactionTrend(activities, trendNow), [activities, trendNow])
   const transactionTotal = useMemo(() => activities.filter((activity) => activity.kind === 'transaction').length, [activities])
   const isSelectedChain = wallet.chainId === selectedNetwork.chainId
@@ -229,19 +236,40 @@ function App() {
 
   async function handleDeployToken() {
     if (!wallet.address) { setNotice({ type: 'error', message: 'Hubungkan wallet sebelum deploy token.' }); return }
-    if (!deployName.trim() || !deploySymbol.trim() || !deploySupply || Number(deploySupply) <= 0) { setNotice({ type: 'error', message: 'Isi nama, simbol, dan supply token dengan benar.' }); return }
+    const deploymentNetworkId = TOKEN_DEPLOYMENT_NETWORK_ID
+    const deploymentNetwork = getNetwork(deploymentNetworkId)
+    if (!deployName.trim() || !deploySymbol.trim() || !deploySupply || Number(deploySupply) <= 0 || !/^\d+(\.\d+)?$/.test(deploySupply)) { setNotice({ type: 'error', message: 'Isi nama, simbol, dan supply desimal dengan benar.' }); return }
     setDeployBusy(true)
+    let deploymentActivityId: string | null = null
     try {
-      await switchToNetwork(selectedNetwork, wallet.source || 'injected')
-      const walletClient = getWalletClientForNetwork(wallet.address, appNetworkChains[selectedNetworkId], wallet.source || 'injected')
+      await switchToNetwork(deploymentNetwork, wallet.source || 'injected')
+      const connected = await getConnectedWallet()
+      if (!connected || connected.address.toLowerCase() !== wallet.address.toLowerCase()) throw new Error('Wallet berubah saat menyiapkan transaksi. Hubungkan kembali wallet lalu coba lagi.')
+      if (connected.chainId !== deploymentNetwork.chainId) throw new Error(`Chain wallet belum benar-benar berpindah ke ${deploymentNetwork.name} (${deploymentNetwork.chainId}).`)
+
+      const publicClient = getPublicClient(deploymentNetworkId)
+      const gasBalance = await publicClient.getBalance({ address: wallet.address })
+      if (gasBalance === 0n) throw new Error('Saldo ETH Sepolia kosong. Dapatkan ETH testnet dari faucet sebelum deploy.')
+
+      const walletClient = getWalletClientForNetwork(wallet.address, appNetworkChains[deploymentNetworkId], wallet.source || 'injected')
       if (!walletClient) throw new Error('Wallet client tidak tersedia.')
       const initialSupply = parseUnits(deploySupply, 18)
-      const hash = await walletClient.deployContract({ account: wallet.address, chain: appNetworkChains[selectedNetworkId], abi: TOKEN_CONTRACT_ABI, bytecode: TOKEN_CONTRACT_BYTECODE, args: [deployName.trim(), deploySymbol.trim().toUpperCase(), initialSupply, wallet.address] })
-      addActivity({ kind: 'transaction', title: 'Token deployment submitted', detail: `${deployName.trim()} / ${selectedNetwork.name}`, status: 'pending', txHash: hash })
-      setNotice({ type: 'success', message: `Transaksi deploy dikirim: ${hash.slice(0, 12)}…` })
+      const hash = await walletClient.deployContract({ account: wallet.address, chain: appNetworkChains[deploymentNetworkId], abi: TOKEN_CONTRACT_ABI, bytecode: TOKEN_CONTRACT_BYTECODE, args: [deployName.trim(), deploySymbol.trim().toUpperCase(), initialSupply, wallet.address] })
+      const activityId = addActivity({ kind: 'transaction', title: 'Token deployment submitted', detail: `${deployName.trim()} / ${deploymentNetwork.name}`, status: 'submitted', txHash: hash })
+      deploymentActivityId = activityId
+      setNotice({ type: 'success', message: `Transaksi deploy dikirim ke ${deploymentNetwork.shortName}: ${hash.slice(0, 12)}…` })
       setActiveView('dashboard')
-      const deploymentNetworkId = selectedNetworkId
-      void getPublicClient(deploymentNetworkId).waitForTransactionReceipt({ hash }).then((receipt) => {
+      const receipt = await Promise.race([
+        publicClient.waitForTransactionReceipt({ hash }),
+        new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error('Timeout menunggu receipt. Cek transaksi di explorer.')), 180_000)),
+      ])
+      if (receipt.status !== 'success' || !receipt.contractAddress) {
+        patchActivity(activityId, { title: 'Token deployment failed', detail: `${deploymentNetwork.name} / receipt reverted`, status: 'failed' })
+        setNotice({ type: 'error', message: 'Transaksi deployment direvert. Token tidak dilacak.' })
+        return
+      }
+      patchActivity(activityId, { title: 'Token deployment confirmed', detail: `${deployName.trim()} / ${deploymentNetwork.name}`, status: 'confirmed' })
+      {
         if (!receipt.contractAddress) return
         const nextToken: TrackedToken = {
           address: receipt.contractAddress,
@@ -253,11 +281,11 @@ function App() {
         writeTrackedToken(nextToken)
         setTrackedToken(nextToken)
         setNotice({ type: 'success', message: `${nextToken.symbol} aktif. Saldo token akan diperbarui otomatis.` })
-      }).catch(() => {
-        setNotice({ type: 'info', message: 'Deploy terkirim, tetapi receipt belum dapat dibaca. Saldo token akan tersedia setelah deployment dikonfirmasi.' })
-      })
+      }
     } catch (error) {
-      setNotice({ type: 'error', message: error instanceof Error ? error.message : 'Deploy token gagal atau ditolak wallet.' })
+      const message = error instanceof Error ? error.message : 'Deploy token gagal atau ditolak wallet.'
+      if (deploymentActivityId) patchActivity(deploymentActivityId, { title: 'Token deployment failed', detail: `${deploymentNetwork.name} / ${message}`, status: 'failed' })
+      setNotice({ type: 'error', message: message.includes('User rejected') || message.includes('denied') ? 'Approval dibatalkan di wallet.' : message })
     } finally { setDeployBusy(false) }
   }
 
@@ -314,9 +342,9 @@ function App() {
 
   async function handleSwitchNetwork() {
     try {
-      await switchToNetwork(getNetwork('giwa-testnet'), wallet.source || 'injected')
+      await switchToNetwork(selectedNetwork, wallet.source || 'injected')
       await refreshWallet()
-      setNotice({ type: 'success', message: 'GIWA Sepolia dipilih di wallet.' })
+      setNotice({ type: 'success', message: `${selectedNetwork.name} dipilih di wallet.` })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Network tidak dapat diganti.'
       setNotice({ type: 'error', message })
@@ -444,7 +472,7 @@ function App() {
             <section className="panel transaction-panel">
               <div className="panel-heading"><div className="icon-tile amber"><LockKeyhole size={17} /></div><div><div className="eyebrow">TRANSACTION POLICY / 03</div><h3>Safe by default</h3></div></div>
               <p className="panel-copy">Deploy dan swap belum mengirim transaksi otomatis. Setiap aksi on-chain harus menampilkan target, network, nominal, simulasi, dan approval wallet.</p>
-              <div className="policy-list"><div><Check size={14} /><span>GIWA Sepolia allowlist</span><span className="policy-state">READY</span></div><div><Check size={14} /><span>Arbitrary calldata</span><span className="policy-state blocked">BLOCKED</span></div><div><Check size={14} /><span>Official swap router</span><span className="policy-state pending">NOT CONFIGURED</span></div></div>
+              <div className="policy-list"><div><Check size={14} /><span>Ethereum Sepolia deployment</span><span className="policy-state">READY</span></div><div><Check size={14} /><span>Arbitrary calldata</span><span className="policy-state blocked">BLOCKED</span></div><div><Check size={14} /><span>Official swap router</span><span className="policy-state pending">NOT CONFIGURED</span></div></div>
               <div className="guardrail"><ShieldCheck size={16} /><span>Swap hanya dapat diaktifkan setelah router resmi/terverifikasi masuk registry.</span></div>
             </section>
           </div>
@@ -494,7 +522,7 @@ function App() {
           <section className="activity-section"><div className="activity-head"><div><div className="eyebrow">LOCAL ACTIVITY / 05</div><h3>Recent signals</h3></div><span className="mono muted">{activities.length.toString().padStart(2, '0')} EVENTS</span></div>{activities.length === 0 ? <div className="empty-state"><Activity size={18} /><span>Belum ada aktivitas. Connect wallet atau generate token untuk mulai.</span></div> : <div className="activity-list">{activities.slice(0, 6).map((item) => <div className="activity-row" key={item.id}><span className={`activity-icon ${item.status}`}>{item.status === 'success' ? <Check size={14} /> : item.status === 'error' ? <XCircle size={14} /> : <Activity size={14} />}</span><div className="activity-copy"><strong>{item.title}</strong><span>{item.detail}</span></div><time className="mono">{formatTime(item.createdAt)}</time></div>)}</div>}</section>
           </>}
           {activeView === 'networks' && <section className="menu-view"><div className="workspace-head"><div><div className="eyebrow">NETWORK CONTROL / 06</div><h2>Choose your testnet.</h2></div><span className="secure-badge">3 RPC endpoints</span></div><p className="panel-copy menu-lede">Pilih network untuk membaca balance, menambahkan chain ke wallet, dan menyiapkan target deploy. Semua network di bawah adalah testnet.</p><div className="network-list">{Object.values(APP_NETWORKS).map((network) => <button className={`network-card ${selectedNetworkId === network.id ? 'selected' : ''}`} key={network.id} onClick={() => void handleSelectNetwork(network.id)}><div className="network-card-top"><div><span className="eyebrow">CHAIN {network.chainId}</span><h3>{network.name}</h3></div><span className="network-symbol">{network.symbol}</span></div><div className="network-meta"><span>RPC</span><strong>{network.rpcUrl}</strong></div><div className="network-meta"><span>EXPLORER</span><strong>{network.explorerUrl.replace('https://', '')}</strong></div><div className="network-action">{selectedNetworkId === network.id ? 'SELECTED / ACTIVE TARGET' : 'USE THIS NETWORK'} <ChevronRight size={15} /></div></button>)}</div><div className="guardrail"><ShieldCheck size={16} /><span>Testnet only. Pastikan wallet memiliki token gas yang sesuai: ETH untuk Sepolia/GIWA dan tBNB untuk BSC Testnet.</span></div></section>}
-          {activeView === 'deploy' && <section className="menu-view"><div className="workspace-head"><div><div className="eyebrow">SMART CONTRACT / 07</div><h2>Deploy a test token.</h2></div><span className="secure-badge">approval required</span></div><p className="panel-copy menu-lede">Deploy ERC-20 minimal ke network pilihan. Tidak ada transaksi otomatis: GiwaTools menyiapkan bytecode, meminta switch network, lalu wallet menampilkan approval.</p><div className="deploy-layout"><section className="panel deploy-form-panel"><div className="panel-heading"><div className="icon-tile lime"><Zap size={17} /></div><div><div className="eyebrow">TOKEN PARAMETERS</div><h3>Token configuration</h3></div></div><label className="form-field"><span className="field-label">TOKEN NAME</span><input value={deployName} onChange={(event) => setDeployName(event.target.value)} placeholder="My Test Token" /></label><label className="form-field"><span className="field-label">SYMBOL</span><input value={deploySymbol} onChange={(event) => setDeploySymbol(event.target.value.toUpperCase().slice(0, 8))} placeholder="MTK" /></label><label className="form-field"><span className="field-label">INITIAL SUPPLY / 18 DECIMALS</span><input inputMode="decimal" value={deploySupply} onChange={(event) => setDeploySupply(event.target.value.replace(/[^0-9.]/g, ''))} placeholder="1000000" /></label><button className="button button-primary full-width deploy-submit" onClick={() => void handleDeployToken()} disabled={deployBusy}>{deployBusy ? <><RefreshCw size={15} className="spin" /> Preparing approval…</> : <>Deploy token on {selectedNetwork.shortName} <ArrowUpRight size={15} /></>}</button></section><section className="panel deploy-preview"><div className="eyebrow">DEPLOYMENT PREVIEW</div><div className="deploy-preview-row"><span>NETWORK</span><strong>{selectedNetwork.name}</strong></div><div className="deploy-preview-row"><span>CHAIN ID</span><strong>{selectedNetwork.chainId}</strong></div><div className="deploy-preview-row"><span>CONTRACT</span><strong>GiwaToolsToken / ERC-20</strong></div><div className="deploy-preview-row"><span>OWNER</span><strong>{wallet.address ? shortenAddress(wallet.address) : 'Connect wallet first'}</strong></div><div className="guardrail"><ShieldCheck size={16} /><span>Review network, token values, gas fee, and wallet approval before signing.</span></div><button className="button button-ghost full-width" onClick={() => setActiveView('networks')}>Change target network <ChevronRight size={15} /></button></section></div></section>}
+          {activeView === 'deploy' && <section className="menu-view"><div className="workspace-head"><div><div className="eyebrow">SMART CONTRACT / 07</div><h2>Deploy a test token.</h2></div><span className="secure-badge">approval required</span></div><p className="panel-copy menu-lede">Deploy ERC-20 minimal secara eksplisit ke Ethereum Sepolia. Network lain tetap tersedia untuk membaca data, tetapi tidak dipakai sebagai target deploy. GiwaTools akan meminta switch chain lalu approval wallet.</p><div className="deploy-layout"><section className="panel deploy-form-panel"><div className="panel-heading"><div className="icon-tile lime"><Zap size={17} /></div><div><div className="eyebrow">TOKEN PARAMETERS</div><h3>Token configuration</h3></div></div><label className="form-field"><span className="field-label">TOKEN NAME</span><input value={deployName} onChange={(event) => setDeployName(event.target.value)} placeholder="My Test Token" /></label><label className="form-field"><span className="field-label">SYMBOL</span><input value={deploySymbol} onChange={(event) => setDeploySymbol(event.target.value.toUpperCase().slice(0, 8))} placeholder="MTK" /></label><label className="form-field"><span className="field-label">INITIAL SUPPLY / 18 DECIMALS</span><input inputMode="decimal" value={deploySupply} onChange={(event) => setDeploySupply(event.target.value.replace(/[^0-9.]/g, ''))} placeholder="1000000" /></label><button className="button button-primary full-width deploy-submit" onClick={() => void handleDeployToken()} disabled={deployBusy}>{deployBusy ? <><RefreshCw size={15} className="spin" /> Preparing approval…</> : <>Deploy token on {deploymentNetwork.shortName} <ArrowUpRight size={15} /></>}</button></section><section className="panel deploy-preview"><div className="eyebrow">DEPLOYMENT PREVIEW / LOCKED TARGET</div><div className="deploy-preview-row"><span>NETWORK</span><strong>{deploymentNetwork.name}</strong></div><div className="deploy-preview-row"><span>CHAIN ID</span><strong>{deploymentNetwork.chainId}</strong></div><div className="deploy-preview-row"><span>CONTRACT</span><strong>GiwaToolsToken / ERC-20</strong></div><div className="deploy-preview-row"><span>OWNER</span><strong>{wallet.address ? shortenAddress(wallet.address) : 'Connect wallet first'}</strong></div><div className="guardrail"><ShieldCheck size={16} /><span>Sediakan ETH Sepolia untuk gas. Periksa target dan fee di wallet sebelum menandatangani.</span></div><button className="button button-ghost full-width" onClick={() => setActiveView('networks')}>Open network monitor <ChevronRight size={15} /></button></section></div></section>}
         </section>
       </main>
 
